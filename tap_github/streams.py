@@ -3,7 +3,8 @@ import singer
 from singer import metrics, bookmarks, metadata
 from tap_github.auth import is_oauth_credentials
 from typing import Generator, Union
-
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 
 
 LOGGER = singer.get_logger()
@@ -939,8 +940,138 @@ class StarGazers(FullTableGithubStream):
         record["user_id"] = record["user"]["id"]
 
 
+class Repositories(FullTableGithubStream):
+    """
+    https://docs.github.com/en/rest/repos/repos#list-organization-repositories
+    """
+
+    tap_stream_id = "repositories"
+    replication_method = "FULL_TABLE"
+    key_properties = ["id"]
+    path = "orgs/{}/repos"
+    use_organization = True
+
+    def add_fields_at_1st_level(self, record, parent_record=None):
+        """
+        Add fields in the record explicitly at the 1st level of JSON.
+        """
+        # Add organization info
+        record["organization"] = record.get("owner", {}).get("login")
+
+        # Extract key visibility and access info
+        record["is_private"] = record.get("private", False)
+        record["visibility"] = record.get("visibility", "public")
+
+        # Add permissions summary if available
+        if "permissions" in record:
+            record["user_permissions"] = record["permissions"]
+
+    def fetch_collaborators(self, client, record):
+        """Helper function to fetch collaborators for a single repository"""
+        try:
+            collaborators_url = (
+                f"https://api.github.com/repos/{record['full_name']}/collaborators"
+            )
+            collaborators = []
+
+            for collab_response in client.authed_get_all_pages(
+                f"{self.tap_stream_id}_collaborators",
+                collaborators_url,
+                self.headers,
+                stream=f"{self.tap_stream_id}_collaborators",
+            ):
+                collaborators.extend(collab_response.json())
+
+            # Add collaborators to the record
+            record["collaborators"] = collaborators
+            return record, None
+
+        except Exception as e:
+            # Log the error but don't fail the entire process
+            print(
+                f"Error fetching collaborators for {record.get('full_name', 'unknown')}: {str(e)}"
+            )
+            record["collaborators"] = []
+            return record, e
+
+    def sync_endpoint(
+        self,
+        client,
+        state,
+        catalog,
+        repo_path,
+        start_date,
+        selected_stream_ids,
+        stream_to_sync,
+    ):
+        """
+        A common function sync full table streams.
+        """
+
+        # build full url
+        full_url = self.build_url(client.base_url, repo_path, None)
+
+        stream_catalog = get_schema(catalog, self.tap_stream_id)
+
+        repo_records = []
+        with metrics.record_counter(self.tap_stream_id) as counter:
+            for response in client.authed_get_all_pages(
+                self.tap_stream_id, full_url, self.headers, stream=self.tap_stream_id
+            ):
+                records = response.json()
+                extraction_time = singer.utils.now()
+                # Loop through all records
+                for record in records:
+
+                    record["_sdc_repository"] = repo_path
+                    self.add_fields_at_1st_level(record=record, parent_record=None)
+
+                    if self.tap_stream_id in selected_stream_ids:
+                        repo_records.append(record)
+
+            # Parallelize this, otherwise it would take too long
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_record = {
+                    executor.submit(self.fetch_collaborators, client, record): record
+                    for record in repo_records
+                }
+
+                # Process completed tasks
+                updated_records = []
+                for future in concurrent.futures.as_completed(future_to_record):
+                    original_record = future_to_record[future]
+                    try:
+                        updated_record, error = future.result()
+                        updated_records.append(updated_record)
+                        if error:
+                            pass
+                    except Exception as exc:
+                        print(
+                            f"Error processing record {original_record.get('full_name', 'unknown')}: {str(exc)}"
+                        )
+                        # Add the original record without collaborators
+                        original_record["collaborators"] = []
+                        updated_records.append(original_record)
+
+                repo_records = updated_records
+
+            with singer.Transformer() as transformer:
+                for record in repo_records:
+                    rec = transformer.transform(
+                        record,
+                        stream_catalog["schema"],
+                        metadata=metadata.to_map(stream_catalog["metadata"]),
+                    )
+                    singer.write_record(
+                        self.tap_stream_id, rec, time_extracted=extraction_time
+                    )
+                    counter.increment()
+        return state
+
+
 # Dictionary of the stream classes
 STREAMS = {
+    "repositories": Repositories,
     "commits": Commits,
     "comments": Comments,
     "issues": Issues,
