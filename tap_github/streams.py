@@ -988,7 +988,7 @@ class Repositories(FullTableGithubStream):
 
         except Exception as e:
             # Log the error but don't fail the entire process
-            print(
+            LOGGER.info(
                 f"Error fetching collaborators for {record.get('full_name', 'unknown')}: {str(e)}"
             )
             record["collaborators"] = []
@@ -1015,19 +1015,30 @@ class Repositories(FullTableGithubStream):
 
         repo_records = []
         with metrics.record_counter(self.tap_stream_id) as counter:
-            for response in client.authed_get_all_pages(
-                self.tap_stream_id, full_url, self.headers, stream=self.tap_stream_id
-            ):
-                records = response.json()
-                extraction_time = singer.utils.now()
-                # Loop through all records
-                for record in records:
+            try:
+                for response in client.authed_get_all_pages(
+                    self.tap_stream_id, full_url, self.headers, stream=self.tap_stream_id
+                ):
+                    try:
+                        records = response.json()
+                        extraction_time = singer.utils.now()
+                        # Loop through all records
+                        for record in records:
+                            try:
+                                record["_sdc_repository"] = repo_path
+                                self.add_fields_at_1st_level(record=record, parent_record=None)
 
-                    record["_sdc_repository"] = repo_path
-                    self.add_fields_at_1st_level(record=record, parent_record=None)
-
-                    if self.tap_stream_id in selected_stream_ids:
-                        repo_records.append(record)
+                                if self.tap_stream_id in selected_stream_ids:
+                                    repo_records.append(record)
+                            except Exception as e:
+                                LOGGER.info(f"Error processing individual record: {str(e)}")
+                                continue
+                    except Exception as e:
+                        LOGGER.info(f"Error parsing response JSON: {str(e)}")
+                        continue
+            except Exception as e:
+                LOGGER.info(f"Error fetching repositories from {full_url}: {str(e)}")
+                return state
 
             # Parallelize this, otherwise it would take too long
             with ThreadPoolExecutor(max_workers=10) as executor:
@@ -1046,7 +1057,7 @@ class Repositories(FullTableGithubStream):
                         if error:
                             pass
                     except Exception as exc:
-                        print(
+                        LOGGER.info(
                             f"Error processing record {original_record.get('full_name', 'unknown')}: {str(exc)}"
                         )
                         # Add the original record without collaborators
@@ -1057,15 +1068,19 @@ class Repositories(FullTableGithubStream):
 
             with singer.Transformer() as transformer:
                 for record in repo_records:
-                    rec = transformer.transform(
-                        record,
-                        stream_catalog["schema"],
-                        metadata=metadata.to_map(stream_catalog["metadata"]),
-                    )
-                    singer.write_record(
-                        self.tap_stream_id, rec, time_extracted=extraction_time
-                    )
-                    counter.increment()
+                    try:
+                        rec = transformer.transform(
+                            record,
+                            stream_catalog["schema"],
+                            metadata=metadata.to_map(stream_catalog["metadata"]),
+                        )
+                        singer.write_record(
+                            self.tap_stream_id, rec, time_extracted=extraction_time
+                        )
+                        counter.increment()
+                    except Exception as e:
+                        LOGGER.info(f"Error transforming/writing record {record.get('full_name', 'unknown')}: {str(e)}")
+                        continue
         return state
 
 
