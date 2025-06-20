@@ -1031,13 +1031,13 @@ class Repositories(FullTableGithubStream):
                                 if self.tap_stream_id in selected_stream_ids:
                                     repo_records.append(record)
                             except Exception as e:
-                                LOGGER.info(f"Error processing individual record: {str(e)}")
+                                LOGGER.info(f"Error processing individual record: {str(e)}. This may be a normal error if the installation doesn't have full access to the repository.")
                                 continue
                     except Exception as e:
-                        LOGGER.info(f"Error parsing response JSON: {str(e)}")
+                        LOGGER.info(f"Error parsing response JSON: {str(e)}. This may be a normal error if the installation doesn't have full access to the repository.")
                         continue
             except Exception as e:
-                LOGGER.info(f"Error fetching repositories from {full_url}: {str(e)}")
+                LOGGER.info(f"Error fetching repositories from {full_url}: {str(e)}. This may be a normal error if the installation cannot list an org's repositories.")
                 return state
 
             # Parallelize this, otherwise it would take too long
