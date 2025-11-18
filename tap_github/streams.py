@@ -959,7 +959,7 @@ class Repositories(FullTableGithubStream):
         full_url = "{}/{}".format(base_url, self.path).format(repo_path)
 
         # Add query parameters for sorting and pagination
-        full_url = "{}?sort=updated&per_page=100".format(full_url)
+        full_url = "{}?sort=updated&direction=desc&per_page=100".format(full_url)
 
         LOGGER.info("Final url is: %s", full_url)
         return full_url
