@@ -521,7 +521,7 @@ class GithubClient:
             try:
                 for response in self.authed_get_all_pages(
                     "get_all_repos",
-                    "{}/orgs/{}/repos?sort=created&direction=desc".format(
+                    "{}/orgs/{}/repos?sort=updated&per_page=100".format(
                         self.base_url, org
                     ),
                     should_skip_404=False,
