@@ -382,6 +382,8 @@ class GithubClient:
             # Fetch the next page if next found in the response.
             if "next" in r.links:
                 url = r.links["next"]["url"]
+                LOGGER.info("Found a next page link in the response:")
+                LOGGER.info(url)
             else:
                 # Break the loop if all pages are fetched.
                 break
@@ -427,19 +429,31 @@ class GithubClient:
         return set(orgs_paths)
 
     def get_selected_repos(self):
+        """
+        Retrieve all repositories accessible to the GitHub App installation with pagination.
+        Uses the existing authed_get_all_pages infrastructure for consistent error handling,
+        rate limiting, and complete data retrieval across all pages.
+        """
+        url = f"{self.base_url}/installation/repositories?per_page=100"
         headers = {
             "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {self.get_access_token()}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
-        url = "https://api.github.com/installation/repositories"
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            repos = response.json()["repositories"]
-            full_names = [repo["full_name"] for repo in repos]
-            return full_names
-        else:
-            response.raise_for_status()
+
+        all_repos = []
+        LOGGER.info("Retrieving repositories accessible to GitHub App installation")
+
+        for response in self.authed_get_all_pages(
+            "get_selected_repos", url, headers, stream="repositories"
+        ):
+            page_data = response.json()
+            repositories = page_data.get("repositories", [])
+            all_repos.extend(repositories)
+            LOGGER.info("Retrieved %d repositories from current page", len(repositories))
+
+        full_names = [repo["full_name"] for repo in all_repos]
+        LOGGER.info("Total repositories accessible: %d", len(full_names))
+        return full_names
 
     def extract_repos_from_config(self):
         """
@@ -521,7 +535,7 @@ class GithubClient:
             try:
                 for response in self.authed_get_all_pages(
                     "get_all_repos",
-                    "{}/orgs/{}/repos?sort=created&direction=desc".format(
+                    "{}/orgs/{}/repos?sort=updated&direction=desc&per_page=100".format(
                         self.base_url, org
                     ),
                     should_skip_404=False,

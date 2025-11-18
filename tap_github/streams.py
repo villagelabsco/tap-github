@@ -951,6 +951,19 @@ class Repositories(FullTableGithubStream):
     path = "orgs/{}/repos"
     use_organization = True
 
+    def build_url(self, base_url, repo_path, bookmark):
+        """
+        Override build_url to add query parameters for organization repositories.
+        """
+        # Build the base URL with organization path
+        full_url = "{}/{}".format(base_url, self.path).format(repo_path)
+
+        # Add query parameters for sorting and pagination
+        full_url = "{}?sort=updated&direction=desc&per_page=100".format(full_url)
+
+        LOGGER.info("Final url is: %s", full_url)
+        return full_url
+
     def add_fields_at_1st_level(self, record, parent_record=None):
         """
         Add fields in the record explicitly at the 1st level of JSON.
