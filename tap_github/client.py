@@ -215,6 +215,12 @@ def rate_throttling(response):
         return True
     if response.status_code == 404:
         return False
+    
+    LOGGER.info(
+        "Inside of rate_throttling - Github API returned status code: %d and response:",
+        response.status_code,
+    )
+    LOGGER.info(response)
 
     # Raise an exception if `X-RateLimit-Remaining` is not found in the header.
     # API does include this key header if provided base URL is not a valid github custom domain.
