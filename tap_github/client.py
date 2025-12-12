@@ -7,12 +7,16 @@ import singer
 from singer import metrics
 from tap_github.auth import is_oauth_credentials
 import os
+from datetime import datetime
 
 LOGGER = singer.get_logger()
 DEFAULT_DOMAIN = "https://api.github.com"
 
 # Set default timeout of 300 seconds
 REQUEST_TIMEOUT = 300
+
+# Buffer time in seconds to refresh token before expiration (5 minutes)
+TOKEN_REFRESH_BUFFER = 300
 
 
 class GithubException(Exception):
@@ -171,6 +175,27 @@ def calculate_seconds(epoch):
     return int(round((epoch - current), 0))
 
 
+def parse_github_timestamp(timestamp_str: str) -> float:
+    """
+    Parse GitHub API ISO 8601 timestamp string to Unix timestamp.
+
+    Args:
+        timestamp_str: ISO 8601 timestamp from GitHub API (e.g., "2025-12-12T15:30:00Z")
+
+    Returns:
+        Unix timestamp as float
+    """
+    try:
+        # Parse the ISO 8601 timestamp
+        dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+        # Convert to Unix timestamp
+        return dt.timestamp()
+    except (ValueError, AttributeError) as e:
+        LOGGER.error("Failed to parse GitHub timestamp '%s': %s", timestamp_str, e)
+        # Return current time as fallback to trigger immediate refresh
+        return time.time()
+
+
 def rate_throttling(response):
     """
     For rate limit errors, get the remaining time before retrying and calculate the time to sleep before making a new request.
@@ -281,15 +306,20 @@ class GithubClient:
         encoded_jwt = jwt.encode(payload, signing_key, algorithm="RS256")
         return encoded_jwt
 
-    def get_access_token(self) -> None:
+    def get_access_token(self) -> str:
         if not self.installation_id:
             orgs = self.extract_orgs_from_config()
             current_org = orgs.pop()
             self.installation_id = self.get_org_installation_id(current_org)
 
-        if self.token or self.token_expires_at > time.time():
+        # Check if we need to refresh the token
+        # Token is valid if it exists AND expires more than TOKEN_REFRESH_BUFFER seconds from now
+        current_time = time.time()
+        if self.token and self.token_expires_at > (current_time + TOKEN_REFRESH_BUFFER):
             return self.token
 
+        # Generate new access token
+        LOGGER.info("Generating new GitHub installation access token")
         response = requests.post(
             url=f"https://api.github.com/app/installations/{self.installation_id}/access_tokens",
             headers={
@@ -298,9 +328,28 @@ class GithubClient:
                 "X-GitHub-Api-Version": "2022-11-28",
             },
         )
-        self.token = response.json()["token"]
-        self.token_expires_at = response.json()["expires_at"]
-        return response.json()["token"]
+
+        # Check for successful response
+        if response.status_code != 201:
+            error_msg = f"Failed to generate access token. Status: {response.status_code}"
+            try:
+                error_details = response.json()
+                error_msg += f", Details: {error_details}"
+            except Exception:
+                error_msg += f", Response: {response.text}"
+            LOGGER.error(error_msg)
+            raise AuthException(error_msg)
+
+        response_data = response.json()
+        self.token = response_data["token"]
+        # Parse the ISO 8601 timestamp to Unix timestamp
+        self.token_expires_at = parse_github_timestamp(response_data["expires_at"])
+
+        # Log token expiration for debugging
+        expires_in_seconds = self.token_expires_at - current_time
+        LOGGER.info("New access token expires in %.0f seconds", expires_in_seconds)
+
+        return self.token
 
     def get_org_installation_id(self, org: str) -> str:
         response = requests.get(
