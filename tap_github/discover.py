@@ -11,6 +11,7 @@ def discover(client):
     Run the discovery mode, prepare the catalog file and return catalog.
     """
     # Check credential in the discover mode.
+    # We don't want to run this if we don't have access rights for commits (i.e. our "Coworker Light" Github app)
     client.verify_access_for_repo()
 
     schemas, field_metadata = get_schemas()
