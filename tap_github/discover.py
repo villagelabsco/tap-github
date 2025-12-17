@@ -11,7 +11,11 @@ def discover(client):
     Run the discovery mode, prepare the catalog file and return catalog.
     """
     # Check credential in the discover mode.
-    client.verify_access_for_repo()
+    # We don't want to run this if we don't have access rights for commits (i.e. our "Coworker Light" Github app)
+    if client.config.get('skip_commits_verification', False):
+        LOGGER.info("Skipping repository access verification for commits endpoint due to skip_commits_verification config setting")
+    else:
+        client.verify_access_for_repo()
 
     schemas, field_metadata = get_schemas()
     catalog = Catalog([])

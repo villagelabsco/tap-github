@@ -23,6 +23,9 @@ plugins:
         - name: flattening_max_depth
         - name: start_date
           value: "2024-10-24T00:00:00Z"
+        - name: skip_commits_verification
+          kind: boolean
+          description: "Skip repository access verification for commits endpoint (useful for Coworker Light GitHub app)"
       config:
         start_date: "2010-01-01T00:00:00Z"
       select:
