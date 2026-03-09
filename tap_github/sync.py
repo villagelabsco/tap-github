@@ -7,6 +7,33 @@ LOGGER = singer.get_logger()
 STREAM_TO_SYNC_FOR_ORGS = ["repositories", "teams", "team_members", "team_memberships"]
 
 
+def get_streams_to_skip(config):
+    """
+    Return the set of stream IDs that should be skipped based on config.
+    The 'streams_to_skip' config option accepts a list of stream names.
+    Child streams of skipped parents are also automatically skipped.
+    """
+    streams_to_skip = set(config.get("streams_to_skip", []))
+    if not streams_to_skip:
+        return set()
+
+    # Also skip children of any skipped parent stream
+    all_skipped = set(streams_to_skip)
+
+    def add_children(stream_name):
+        stream_cls = STREAMS.get(stream_name)
+        if stream_cls:
+            for child in stream_cls.children:
+                all_skipped.add(child)
+                add_children(child)
+
+    for stream_name in list(streams_to_skip):
+        add_children(stream_name)
+
+    LOGGER.info("Streams to skip (including children): %s", all_skipped)
+    return all_skipped
+
+
 def get_selected_streams(catalog):
     """
     Gets selected streams.  Checks schema's 'selected'
@@ -195,7 +222,15 @@ def sync(client, config, state, catalog):
     selected_stream_ids = get_selected_streams(catalog)
     LOGGER.info("Selected Stream IDs %s", selected_stream_ids)
 
+    # Remove any streams that should be skipped (e.g. for Coworker Light GitHub app)
+    skipped = get_streams_to_skip(config)
+    if skipped:
+        selected_stream_ids = [s for s in selected_stream_ids if s not in skipped]
+        LOGGER.info("Selected Stream IDs after applying streams_to_skip: %s", selected_stream_ids)
+
     streams_to_sync = get_stream_to_sync(catalog)
+    if skipped:
+        streams_to_sync = [s for s in streams_to_sync if s not in skipped]
     LOGGER.info("Sync stream %s", streams_to_sync)
 
     repositories, organizations = client.extract_repos_from_config()

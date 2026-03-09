@@ -17,10 +17,17 @@ def discover(client):
     else:
         client.verify_access_for_repo()
 
+    streams_to_skip = set(client.config.get('streams_to_skip', []))
+    if streams_to_skip:
+        LOGGER.info("Streams to skip during discovery: %s", streams_to_skip)
+
     schemas, field_metadata = get_schemas()
     catalog = Catalog([])
 
     for stream_name, schema_dict in schemas.items():
+        if stream_name in streams_to_skip:
+            LOGGER.info("Skipping stream '%s' from catalog (configured in streams_to_skip)", stream_name)
+            continue
         try:
             schema = Schema.from_dict(schema_dict)
             mdata = field_metadata[stream_name]
