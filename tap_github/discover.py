@@ -2,6 +2,7 @@ import singer
 from singer import metadata
 from singer.catalog import Catalog, CatalogEntry, Schema
 from tap_github.schema import get_schemas
+from tap_github.sync import get_streams_to_skip
 
 LOGGER = singer.get_logger()
 
@@ -17,10 +18,17 @@ def discover(client):
     else:
         client.verify_access_for_repo()
 
+    streams_to_skip = get_streams_to_skip(client.config)
+    if streams_to_skip:
+        LOGGER.info("Streams to skip during discovery: %s", streams_to_skip)
+
     schemas, field_metadata = get_schemas()
     catalog = Catalog([])
 
     for stream_name, schema_dict in schemas.items():
+        if stream_name in streams_to_skip:
+            LOGGER.info("Skipping stream '%s' from catalog (configured in streams_to_skip)", stream_name)
+            continue
         try:
             schema = Schema.from_dict(schema_dict)
             mdata = field_metadata[stream_name]
