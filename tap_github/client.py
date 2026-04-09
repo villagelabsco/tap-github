@@ -15,6 +15,9 @@ DEFAULT_DOMAIN = "https://api.github.com"
 # Set default timeout of 300 seconds
 REQUEST_TIMEOUT = 300
 
+# Default delay between API calls in milliseconds
+DEFAULT_API_CALL_DELAY_MS = 750
+
 # Buffer time in seconds to refresh token before expiration (5 minutes)
 TOKEN_REFRESH_BUFFER = 300
 
@@ -275,6 +278,7 @@ class GithubClient:
         self.session = requests.Session()
         self.base_url = config["base_url"] if config.get("base_url") else DEFAULT_DOMAIN
         self.not_accessible_repos = set()
+        self.api_call_delay_ms = config.get("api_call_delay_ms", DEFAULT_API_CALL_DELAY_MS)
 
     @property
     def cached_jwt(self) -> str:
@@ -406,6 +410,11 @@ class GithubClient:
         with metrics.http_request_timer(source) as timer:
             self.set_token()
             self.session.headers.update(headers)
+
+            # Throttle API calls to avoid 429/502 responses from GitHub
+            if self.api_call_delay_ms > 0:
+                time.sleep(self.api_call_delay_ms / 1000.0)
+
             resp = self.session.request(
                 method="get", url=url, timeout=self.get_request_timeout()
             )
